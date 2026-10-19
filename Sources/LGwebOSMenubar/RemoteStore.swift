@@ -40,6 +40,10 @@ struct RemoteEvent: Identifiable, Codable { let id: UUID; let date: Date; let ti
     @Published var mediaStatus = "Choose a video, a song, or a photo."
     @Published var preferredPanelHeight: CGFloat = 740
     @Published var favorites = Set(UserDefaults.standard.stringArray(forKey: "tv.favorites") ?? ["netflix", "youtube.leanback.v4", "amazon", "com.disney.disneyplus-prod"])
+    /// Lets the panel owner hide the menu bar panel before a modal dialog, so the
+    /// dialog is never rendered underneath the floating panel. Setting a higher
+    /// window level does not help: runModal resets it to the modal-panel level.
+    var dismissMenuBarPanel: (() -> Void)?
     private(set) var connection: WebOSConnection?
     private var connectTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -103,8 +107,10 @@ struct RemoteEvent: Identifiable, Codable { let id: UUID; let date: Date; let ti
         homePresentation.dismiss()
         connection?.close(); refreshTask?.cancel(); pointerReady = false
         let client = WebOSConnection(host: host); connection = client
-        client.onCertificateTrust = { host, fingerprint in
-            await ConnectionTrustPrompt.confirm(host: host, fingerprint: fingerprint)
+        client.onCertificateTrust = { [weak self] host, fingerprint in
+            // Hide the panel so the trust dialog is visible and clickable.
+            self?.dismissMenuBarPanel?()
+            return await ConnectionTrustPrompt.confirm(host: host, fingerprint: fingerprint)
         }
         client.onPairing = { [weak self] in self?.pairing = true }
         client.onEvent = { [weak self] title, detail in self?.log(title, detail) }
@@ -402,6 +408,9 @@ struct RemoteEvent: Identifiable, Codable { let id: UUID; let date: Date; let ti
         alert.messageText = "Forget this TV's pairing?"
         alert.informativeText = "The saved key and certificate for this TV will be removed from this Mac. You can connect and pair again."
         alert.addButton(withTitle: "Forget pairing"); alert.addButton(withTitle: "Cancel")
+        // Hide the panel first so this modal cannot be rendered underneath it,
+        // the same hidden-dialog issue as the certificate trust prompt.
+        dismissMenuBarPanel?()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let pairingHost = host
         disconnect()

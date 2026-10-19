@@ -44,6 +44,9 @@ private struct PanelShell: View {
     private var sizeSubscription: AnyCancellable?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
+        // Modal dialogs must not be rendered underneath the floating panel:
+        // hide the panel while the app presents an alert such as a trust prompt.
+        store.dismissMenuBarPanel = { [weak self] in self?.panel.orderOut(nil) }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "tv", accessibilityDescription: "LGwebOS-menubar")
         statusItem.button?.image?.isTemplate = true
