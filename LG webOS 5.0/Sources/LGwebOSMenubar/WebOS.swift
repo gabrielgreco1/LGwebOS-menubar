@@ -169,7 +169,20 @@ enum RemoteError: LocalizedError {
         guard let path = AppResources.bundle.url(forResource: "registration", withExtension: "json"),
               var payload = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any] else { throw RemoteError.message("The pairing manifest is unavailable.") }
         if let key = storedKey { payload["client-key"] = key }
-        let answer = try await exchange(["type": "register", "id": "register", "payload": payload], timeout: 90)
+        let answer: [String: Any]
+        do {
+            answer = try await exchange(["type": "register", "id": "register", "payload": payload], timeout: 90)
+        } catch RemoteError.message(let text) where Self.rejectsSignedManifest(text) {
+            // Newer firmware blacklists the signed test manifest. Ask for the signed permissions without the
+            // signature, and fall back to basic permissions only if the TV refuses the manifest itself.
+            try Task.checkCancellation()
+            do {
+                answer = try await exchange(["type": "register", "id": "register", "payload": Self.unsignedRegistration(payload, extended: true)], timeout: 90)
+            } catch RemoteError.message(let text) where !Self.endsPairingAttempt(text) {
+                try Task.checkCancellation()
+                answer = try await exchange(["type": "register", "id": "register", "payload": Self.unsignedRegistration(payload, extended: false)], timeout: 90)
+            }
+        }
         try Task.checkCancellation()
         guard storedKey != nil || !(answer["client-key"] as? String ?? "").isEmpty else {
             throw RemoteError.message("The TV did not provide a pairing key.")
@@ -181,6 +194,29 @@ enum RemoteError: LocalizedError {
         if storedPin == nil, let fingerprint = trust.approvedFingerprint() {
             try await Task.detached(priority: .userInitiated) { try TVCertificatePin.save(fingerprint, host: pairingHost) }.value
         }
+    }
+    nonisolated static func rejectsSignedManifest(_ error: String) -> Bool {
+        error.localizedCaseInsensitiveContains("blacklisted certificate")
+    }
+    /// A user denial or timeout must not trigger another prompt on the TV.
+    nonisolated static func endsPairingAttempt(_ error: String) -> Bool {
+        ["denied", "reject", "cancel", "timed out"].contains { error.localizedCaseInsensitiveContains($0) }
+            && !rejectsSignedManifest(error)
+    }
+    nonisolated static func unsignedRegistration(_ payload: [String: Any], extended: Bool) -> [String: Any] {
+        var payload = payload
+        if var manifest = payload["manifest"] as? [String: Any] {
+            if extended, let signed = (manifest["signed"] as? [String: Any])?["permissions"] as? [String] {
+                var permissions = manifest["permissions"] as? [String] ?? []
+                for permission in signed where permission != "TEST_SECURE" && !permissions.contains(permission) {
+                    permissions.append(permission)
+                }
+                manifest["permissions"] = permissions
+            }
+            manifest.removeValue(forKey: "signed"); manifest.removeValue(forKey: "signatures")
+            payload["manifest"] = manifest
+        }
+        return payload
     }
     nonisolated static func validHost(_ host: String) -> Bool {
         let parts = host.split(separator: ".", omittingEmptySubsequences: false)

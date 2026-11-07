@@ -36,6 +36,18 @@ enum FeatureChecks {
         try truth(registration["client-key"] == nil)
         try truth(permissions.contains("LAUNCH"))
         try truth(signatures.contains { !($0["signature"] as? String ?? "").isEmpty })
+        try truth(WebOSConnection.rejectsSignedManifest("403 Pairing rejected: blacklisted certificate detected"))
+        try truth(!WebOSConnection.rejectsSignedManifest("403 cancelled"))
+        try truth(WebOSConnection.endsPairingAttempt("403 User denied access"))
+        try truth(!WebOSConnection.endsPairingAttempt("400 invalid manifest"))
+        let basic = WebOSConnection.unsignedRegistration(registration, extended: false)["manifest"] as? [String: Any] ?? [:]
+        try truth(basic["signed"] == nil && basic["signatures"] == nil)
+        try equal(basic["permissions"] as? [String], permissions)
+        let extended = WebOSConnection.unsignedRegistration(registration, extended: true)
+        let extendedPermissions = (extended["manifest"] as? [String: Any])?["permissions"] as? [String] ?? []
+        try truth(extendedPermissions.contains("READ_INSTALLED_APPS") && !extendedPermissions.contains("TEST_SECURE"))
+        try equal(Set(extendedPermissions).count, extendedPermissions.count)
+        try equal(extended["pairingType"] as? String, "PROMPT")
         guard let catalogURL = AppResources.bundle.url(forResource: "app-catalog", withExtension: "json") else {
             throw RemoteError.message("The packaged app catalog is missing")
         }
